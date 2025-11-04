@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"auth_test/internal/store"
-	"golang.org/x/crypto/bcrypt
+	"golang.org/x/crypto/bcrypt"
 	"github.com/golang-jwt/jwt/v5"
 )
 
