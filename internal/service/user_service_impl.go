@@ -7,8 +7,9 @@ import (
 	"time"
 
 	"auth_test/internal/store"
-	"golang.org/x/crypto/bcrypt"
+
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/crypto/bcrypt"
 )
 
 var (
@@ -66,7 +67,6 @@ func (s *UserServiceImpl) ValidateCredentials(username, password string) (bool, 
 	log.Printf("Credentials are valid for user: %s", username)
 	return true, nil
 }
-}
 
 // GenerateToken реализует создание нового JWT.
 func (s *UserServiceImpl) GenerateToken(username string) (string, error) {
@@ -77,9 +77,9 @@ func (s *UserServiceImpl) GenerateToken(username string) (string, error) {
 
 	// Создает claims (заявления) для JWT
 	claims := &jwt.RegisteredClaims{
-		Subject:   username,                     // Идентификатор пользователя
+		Subject:   username,                           // Идентификатор пользователя
 		ExpiresAt: jwt.NewNumericDate(expirationTime), // Время истечения
-		IssuedAt:  jwt.NewNumericDate(time.Now()),    // Время выдачи
+		IssuedAt:  jwt.NewNumericDate(time.Now()),     // Время выдачи
 	}
 
 	// Создает новый токен с указанным алгоритмом подписи и claims
@@ -94,7 +94,6 @@ func (s *UserServiceImpl) GenerateToken(username string) (string, error) {
 
 	log.Printf("Token generated successfully for user: %s", username)
 	return tokenString, nil
-}
 }
 
 // RefreshToken реализует логику обновления токена.
@@ -122,15 +121,21 @@ func (s *UserServiceImpl) RefreshToken(token string) (string, error) {
 		return "", errors.New("invalid token") // Общая ошибка для невалидного токена
 	}
 
-
 	if tkn.Valid {
-		username, ok := claims.Subject(claims)
-		if !ok || username == "" {
-			log.Println("Token does not contain a valid subject.")
-			return "", errors.New("invalid token subject")
+
+		claimsMap, ok := tkn.Claims.(jwt.MapClaims)
+		if !ok {
+			log.Println("Invalid token claims format")
+			return "", errors.New("invalid token claims: format is not MapClaims")
 		}
 
-		newToken, err := s.GenerateToken(username) // Используем уже существующую функцию генерации
+		username, ok := claimsMap["sub"].(string)
+		if !ok || username == "" {
+			log.Printf("Token does not contain a valid subject.")
+			return "", errors.New("invalid token claims: subject is not a string or is empty")
+		}
+
+		newToken, err := s.GenerateToken(username)
 		if err != nil {
 			log.Printf("Failed to generate new token: %v", err)
 			return "", fmt.Errorf("failed to generate new token: %w", err)
