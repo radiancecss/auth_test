@@ -1,52 +1,61 @@
 package handler
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"auth_test/internal/service"
 
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// обрабатывает http запросы для аутентификации
 type AuthHandler struct {
 	userService service.UserService
 }
 
-// создает новый экземпляр authhandlera
 func NewAuthHandler(userService service.UserService) *AuthHandler {
 	return &AuthHandler{
 		userService: userService,
 	}
 }
 
-// структура для запроса
-type LoginRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
-
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		http.Error(w, "Authorization header missing", http.StatusUnauthorized)
 		return
 	}
 
-	var req LoginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	parts := strings.SplitN(authHeader, " ", 2)
+	if len(parts) != 2 || strings.ToLower(parts[0]) != "basic" {
+		http.Error(w, "Authorization header malformed", http.StatusUnauthorized)
 		return
 	}
-	defer r.Body.Close()
 
-	isValid, err := h.userService.ValidateCredentials(req.Username, req.Password)
+	credentials, err := base64.StdEncoding.DecodeString(parts[1])
+	if err != nil {
+		http.Error(w, "Failed to decode credentials", http.StatusUnauthorized)
+		return
+	}
+
+	loginParts := strings.SplitN(string(credentials), ":", 2)
+	if len(loginParts) != 2 {
+		http.Error(w, "Invalid username or password format", http.StatusUnauthorized)
+		return
+	}
+	username := loginParts[0]
+	password := loginParts[1]
+
+	isValid, err := h.userService.ValidateCredentials(username, password)
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidCredentials) || errors.Is(err, service.ErrUserNotFound) {
 			http.Error(w, "Invalid username or password", http.StatusUnauthorized)
 			return
 		}
-		http.Error(w, "Internal server error during login", http.StatusInternalServerError)
+		http.Error(w, "Internal server error during login validation", http.StatusInternalServerError)
 		return
 	}
 
@@ -55,7 +64,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := h.userService.GenerateToken(req.Username)
+	token, err := h.userService.GenerateToken(username)
 	if err != nil {
 		http.Error(w, "Internal server error generating token", http.StatusInternalServerError)
 		return
@@ -63,17 +72,12 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Authorization", "Bearer "+token)
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("Login successful"))
 }
 
-// RefreshRequest структура для запроса обновления токена.
 type RefreshRequest struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
-// Refresh обрабатывает POST /refresh.
-// Принимает JSON с refresh_token.
-// Возвращает 200 OK и Authorization: Bearer <new_token> при успехе.
 func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -91,10 +95,9 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, jwt.ErrTokenExpired) {
 			http.Error(w, "Token expired", http.StatusUnauthorized)
-		} else if err != nil {
-			http.Error(w, "Invalid token", http.StatusBadRequest)
+		} else {
+			http.Error(w, "Internal server error refreshing token", http.StatusInternalServerError)
 		}
-		http.Error(w, "Internal server error refreshing token", http.StatusInternalServerError)
 		return
 	}
 

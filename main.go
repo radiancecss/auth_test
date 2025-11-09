@@ -9,48 +9,45 @@ import (
 	"syscall"
 	"time"
 
-	"auth_test/internal/config"  // Для загрузки конфигурации
-	"auth_test/internal/handler" // Для HTTP-обработчиков
-	"auth_test/internal/service" // Для бизнес-логики
-	"auth_test/internal/store"   // Для хранилища данных
+	"auth_test/internal/config"
+	"auth_test/internal/handler"
+	"auth_test/internal/service"
+	"auth_test/internal/store"
 )
 
 func main() {
 
-	cfg := config.Config{
-		ServerPort:        "8080",
-		JWTSecret:         "secret_key_for_testing",
-		TokenLifetimeMins: 60,
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
 	}
 	log.Printf("Configuration loaded: Port=%s, TokenLifetime=%d mins", cfg.ServerPort, cfg.TokenLifetimeMins)
 
-	// 2. Инициализация зависимостей
-
-	// 2.1. UserStore
-	userStore := store.NewInMemoryUserStore() // Используем in-memory заглушку
+	userStore := store.NewInMemoryUserStore()
 	log.Println("UserStore (in-memory) initialized.")
 
-	// 2.2. UserService
 	userService := service.NewUserServiceImpl(userStore, cfg.JWTSecret, cfg.TokenLifetimeMins)
 	log.Println("UserService initialized.")
 
-	// 2.3. AuthHandler
 	authHandler := handler.NewAuthHandler(userService)
 	log.Println("AuthHandler initialized.")
 
-	// 3. Настройка HTTP-маршрутов
+	verifyHandler := handler.NewVerifyHandler(userService)
+	log.Println("VerifyHandler initialized.")
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/login", authHandler.Login)
-	mux.HandleFunc("/refresh", authHandler.Refresh) // Это будет наш verify endpoint из этапа 5
-	log.Println("HTTP routes registered: /login, /refresh")
+	mux.HandleFunc("/refresh", authHandler.Refresh)
 
-	// 4. Настройка HTTP-сервера
+	mux.HandleFunc("/verify", verifyHandler.HandleVerify)
+	log.Println("HTTP routes registered: /login, /refresh, /verify")
+
 	server := &http.Server{
-		Addr:         ":" + cfg.ServerPort, // Адрес сервера (например, ":8080")
-		Handler:      mux,                  // маршрутизатор
-		ReadTimeout:  10 * time.Second,     // Таймаут чтения запроса
-		WriteTimeout: 10 * time.Second,     // Таймаут записи ответа
-		IdleTimeout:  120 * time.Second,    // Таймаут неактивного соединения
+		Addr:         ":" + cfg.ServerPort,
+		Handler:      mux,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 
 	go func() {
@@ -67,7 +64,7 @@ func main() {
 	<-stop
 
 	log.Println("Shutting down HTTP server...")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second) // Таймаут на завершение
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	if err := server.Shutdown(ctx); err != nil {

@@ -1,0 +1,7 @@
+### Запрос для тестирования логина
+GET http://localhost:8080/login
+Authorization: Basic dGVzdHVzZXI6cGFzc3dvcmQxMjM=
+
+### Запрос для проверки токена
+POST http://localhost:8080/verify
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0dXNlciIsImV4cCI6MTc2MjcxMDYxNywiaWF0IjoxNzYyNzA3MDE3fQ.TDS5AYBAZz-rZfVvDahyI6hazxLTvah1C-rwlw-7hHA

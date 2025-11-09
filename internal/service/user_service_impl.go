@@ -12,12 +12,6 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-var (
-	ErrUserNotFound       = errors.New("user not found")
-	ErrInvalidCredentials = errors.New("invalid credentials")
-)
-
-// UserServiceImpl - конкретная реализация UserService.
 type UserServiceImpl struct {
 	UserStore     store.UserStore
 	JWTSecret     string
@@ -33,59 +27,46 @@ func NewUserServiceImpl(userStore store.UserStore, jwtSecret string, tokenLifeti
 	}
 }
 
-// ValidateCredentials проверка токена
 func (s *UserServiceImpl) ValidateCredentials(username, password string) (bool, error) {
 	log.Printf("Validating credentials for user: %s", username)
 
-	// Получаем пользователя из хранилища
 	user, err := s.UserStore.Get(username)
 	if err != nil {
 		if errors.Is(err, store.ErrUserNotFound) {
 			log.Println("User not found.")
-			return false, ErrInvalidCredentials // Всегда возвращаем ErrInvalidCredentials, чтобы не раскрывать, существует ли пользователь
+			return false, ErrInvalidCredentials
 		}
-		// Другие ошибки при доступе к хранилищу
 		log.Printf("Error accessing user store: %v", err)
 		return false, fmt.Errorf("failed to retrieve user: %w", err)
 	}
 
-	// Сравнивает введенный пароль с хэшем пароля пользователя
-	// bcrypt.CompareHashAndPassword возвращает nil, если пароли совпадают
-	err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password))
+	err = bcrypt.CompareHashAndPassword(user.HashedPassword, []byte(password))
 	if err != nil {
-		// Если ошибка, значит пароли не совпали (или другая ошибка bcrypt)
 		if errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
 			log.Println("Password mismatch.")
 			return false, ErrInvalidCredentials
 		}
-		// Другие ошибки bcrypt
 		log.Printf("Error comparing password hash: %v", err)
 		return false, fmt.Errorf("failed to compare password: %w", err)
 	}
 
-	// Если ошибок нет, значит пароли совпадают
 	log.Printf("Credentials are valid for user: %s", username)
 	return true, nil
 }
 
-// GenerateToken реализует создание нового JWT.
 func (s *UserServiceImpl) GenerateToken(username string) (string, error) {
 	log.Printf("Generating token for user: %s", username)
 
-	// Определяет время истечения токена
 	expirationTime := time.Now().Add(s.TokenLifetime)
 
-	// Создает claims (заявления) для JWT
 	claims := &jwt.RegisteredClaims{
-		Subject:   username,                           // Идентификатор пользователя
-		ExpiresAt: jwt.NewNumericDate(expirationTime), // Время истечения
-		IssuedAt:  jwt.NewNumericDate(time.Now()),     // Время выдачи
+		Subject:   username,
+		ExpiresAt: jwt.NewNumericDate(expirationTime),
+		IssuedAt:  jwt.NewNumericDate(time.Now()),
 	}
 
-	// Создает новый токен с указанным алгоритмом подписи и claims
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 
-	// Подписывает токен секретным ключом
 	tokenString, err := token.SignedString([]byte(s.JWTSecret))
 	if err != nil {
 		log.Printf("Error signing token: %v", err)
@@ -96,55 +77,82 @@ func (s *UserServiceImpl) GenerateToken(username string) (string, error) {
 	return tokenString, nil
 }
 
-// RefreshToken реализует логику обновления токена.
-func (s *UserServiceImpl) RefreshToken(token string) (string, error) {
+func (s *UserServiceImpl) RefreshToken(refreshToken string) (string, error) {
 	log.Printf("Attempting to refresh token...")
 
 	claims := &jwt.RegisteredClaims{}
-	tkn, err := jwt.ParseWithClaims(token, claims, func(t *jwt.Token) (interface{}, error) {
-		// Проверяет метод подписи токена
-		if t.Method.Alg() != jwt.SigningMethodHS256.Alg() {
-			log.Printf("Unexpected signing method: %s", t.Method.Alg())
+	tkn, err := jwt.ParseWithClaims(refreshToken, claims, func(t *jwt.Token) (interface{}, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			log.Printf("Unexpected signing method: %s", t.Header["alg"])
 			return nil, errors.New("unexpected signing method")
 		}
-		// Возвращает секретный ключ для проверки подписи
 		return []byte(s.JWTSecret), nil
 	})
 
 	if err != nil {
-		// Обрабатывает различные ошибки парсинга/валидации
 		if errors.Is(err, jwt.ErrTokenExpired) {
 			log.Println("Token is expired")
-			return "", errors.New("token expired") // Специальная ошибка для истекшего токена
+			return "", ErrTokenExpired
 		}
 		log.Printf("Error parsing token: %v", err)
-		return "", errors.New("invalid token") // Общая ошибка для невалидного токена
+		return "", errors.New("invalid token")
 	}
 
-	if tkn.Valid {
-
-		claimsMap, ok := tkn.Claims.(jwt.MapClaims)
-		if !ok {
-			log.Println("Invalid token claims format")
-			return "", errors.New("invalid token claims: format is not MapClaims")
-		}
-
-		username, ok := claimsMap["sub"].(string)
-		if !ok || username == "" {
-			log.Printf("Token does not contain a valid subject.")
-			return "", errors.New("invalid token claims: subject is not a string or is empty")
-		}
-
-		newToken, err := s.GenerateToken(username)
-		if err != nil {
-			log.Printf("Failed to generate new token: %v", err)
-			return "", fmt.Errorf("failed to generate new token: %w", err)
-		}
-		log.Printf("Token refreshed successfully for user: %s", username)
-		return newToken, nil
+	if !tkn.Valid {
+		log.Println("Token is not valid.")
+		return "", errors.New("invalid token")
 	}
 
-	// Если токен невалиден после всех проверок
-	log.Println("Token is not valid.")
-	return "", errors.New("invalid token")
+	claimsMap, ok := tkn.Claims.(jwt.MapClaims)
+	if !ok {
+		log.Println("Invalid token claims format")
+		return "", errors.New("invalid token claims: format is not MapClaims")
+	}
+
+	username, ok := claimsMap["sub"].(string)
+	if !ok || username == "" {
+		log.Printf("Token does not contain a valid subject.")
+		return "", errors.New("invalid token claims: subject is not a string or is empty")
+	}
+
+	newAccessToken, err := s.GenerateToken(username)
+	if err != nil {
+		log.Printf("Failed to generate new token: %v", err)
+		return "", fmt.Errorf("failed to generate new token: %w", err)
+	}
+	log.Printf("Token refreshed successfully for user: %s", username)
+	return newAccessToken, nil
+}
+
+// ValidateToken проверяет JWT-токен и возвращает имя пользователя, если он валиден.
+func (s *UserServiceImpl) ValidateToken(tokenString string) (string, error) {
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return []byte(s.JWTSecret), nil
+	})
+
+	if err != nil {
+		if errors.Is(err, jwt.ErrTokenExpired) {
+			return "", ErrTokenExpired
+		}
+		return "", errors.New("invalid token format or signature")
+	}
+
+	if !token.Valid {
+		return "", errors.New("invalid token")
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return "", errors.New("invalid token claims format")
+	}
+
+	username, ok := claims["sub"].(string)
+	if !ok || username == "" {
+		return "", errors.New("invalid token: subject (username) not found")
+	}
+
+	return username, nil
 }
