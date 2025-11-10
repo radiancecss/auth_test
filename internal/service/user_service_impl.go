@@ -12,6 +12,13 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// Объявления ошибок, используемых в этом пакете.
+var (
+	ErrUserNotFound       = errors.New("user not found")
+	ErrInvalidCredentials = errors.New("invalid credentials")
+	ErrTokenExpired       = errors.New("token is expired")
+)
+
 type UserServiceImpl struct {
 	UserStore     store.UserStore
 	JWTSecret     string

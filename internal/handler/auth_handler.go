@@ -93,7 +93,7 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 
 	newToken, err := h.userService.RefreshToken(req.RefreshToken)
 	if err != nil {
-		if errors.Is(err, jwt.ErrTokenExpired) {
+		if errors.Is(err, jwt.ErrTokenExpired) { // <-- Здесь мог быть jwt.ErrTokenExpired, если он используется напрямую
 			http.Error(w, "Token expired", http.StatusUnauthorized)
 		} else {
 			http.Error(w, "Internal server error refreshing token", http.StatusInternalServerError)
@@ -104,4 +104,57 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Authorization", "Bearer "+newToken)
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Token refreshed successfully"))
+}
+
+// Verify проверяет JWT-токен и обновляет его, если он валиден.
+func (h *AuthHandler) Verify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		http.Error(w, "Authorization header missing or malformed", http.StatusBadRequest)
+		return
+	}
+
+	parts := strings.SplitN(authHeader, " ", 2)
+	if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
+		http.Error(w, "Invalid Authorization header format", http.StatusBadRequest)
+		return
+	}
+	tokenString := parts[1]
+
+	username, err := h.userService.ValidateToken(tokenString)
+	if err != nil {
+		if errors.Is(err, service.ErrTokenExpired) {
+			refreshedToken, refreshErr := h.userService.RefreshToken(tokenString)
+			if refreshErr != nil {
+				if errors.Is(refreshErr, service.ErrTokenExpired) {
+					http.Error(w, "Token expired and cannot be refreshed", http.StatusUnauthorized)
+				} else {
+					http.Error(w, "Internal server error during token refresh", http.StatusInternalServerError)
+				}
+				return
+			}
+			w.Header().Set("Authorization", "Bearer "+refreshedToken)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("Token expired, but refreshed successfully"))
+			return
+		} else {
+			http.Error(w, "Invalid token", http.StatusUnauthorized)
+			return
+		}
+	}
+
+	newToken, err := h.userService.GenerateToken(username)
+	if err != nil {
+		http.Error(w, "Internal server error generating new token", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Authorization", "Bearer "+newToken)
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("Token verified"))
 }

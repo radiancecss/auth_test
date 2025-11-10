@@ -1,10 +1,8 @@
+//go:generate mockgen -destination=../../tests/service/mock_user_service.go -package=service auth_test/internal/service UserService
 package service
 
-import (
-	"errors"
-)
+// ...
 
-// UserService определяет операции, которые могут быть выполнены с пользователями.
 type UserService interface {
 	// ValidateCredentials проверяет соответств. имя и пароль от уч. записи
 	ValidateCredentials(username, password string) (bool, error)
@@ -18,10 +16,3 @@ type UserService interface {
 	// ValidateToken проверяет JWT-токен и возвращает имя пользователя, если он валиден.
 	ValidateToken(token string) (string, error)
 }
-
-// Ошибки, которые могут возвращаться методами сервиса
-var (
-	ErrUserNotFound       = errors.New("user not found")
-	ErrInvalidCredentials = errors.New("invalid credentials")
-	ErrTokenExpired       = errors.New("token is expired")
-)
