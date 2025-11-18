@@ -1,50 +1,75 @@
-package config
+package main
 
 import (
-	"fmt"
+	"context"
 	"log"
+	"net/http"
 	"os"
-	"strconv" // Для конвертации строки в int
+	"os/signal"
+	"syscall"
+	"time"
+
+	"auth_test/internal/config"
+	"auth_test/internal/handler"
+	"auth_test/internal/service"
+	"auth_test/internal/store"
 )
 
-type Config struct {
-	ServerPort        string
-	JWTSecret         string
-	TokenLifetimeMins int
-}
+func main() {
 
-// LoadConfig читает конфигурации из переменных окружения.
-func LoadConfig() (*Config, error) {
-	cfg := &Config{}
-
-	// Чтение ServerPort
-	port := os.Getenv("APP_PORT") // Или "ServerPort", если ты хочешь использовать такое имя переменной
-	if port == "" {
-		port = "8080" // Значение по умолчанию
-		log.Printf("APP_PORT not set, using default: %s", port)
-	}
-	cfg.ServerPort = port
-
-	// Чтение JWTSecret
-	jwtSecret := os.Getenv("JWT_SECRET")
-	if jwtSecret == "" {
-		return nil, fmt.Errorf("JWT_SECRET environment variable not set. Cannot start application")
-	}
-	cfg.JWTSecret = jwtSecret
-
-	// Чтение TokenLifetimeMins
-	lifetimeStr := os.Getenv("JWT_TOKEN_LIFETIME_MINS")
-	if lifetimeStr == "" {
-		lifetimeStr = "60" // Значение по умолчанию
-		log.Printf("JWT_TOKEN_LIFETIME_MINS not set, using default: %s", lifetimeStr)
-	}
-	lifetime, err := strconv.Atoi(lifetimeStr)
+	cfg, err := config.LoadConfig()
 	if err != nil {
-		
-		return nil, fmt.Errorf("invalid JWT_TOKEN_LIFETIME_MINS: %v", err)
+		log.Fatalf("Failed to load configuration: %v", err)
 	}
-	cfg.TokenLifetimeMins = lifetime
+	log.Printf("Configuration loaded: ServerPort=%s, JWTSecret=***, TokenLifetime=%d mins, Username=%s",
+		cfg.ServerPort, cfg.TokenLifetimeMins, cfg.Username)
 
-	log.Println("Configuration loaded successfully.")
-	return cfg, nil
+	userStore := store.NewInMemoryUserStore()
+	log.Println("UserStore (in-memory) initialized.")
+
+	userService := service.NewUserServiceImpl(userStore, cfg.JWTSecret, cfg.TokenLifetimeMins)
+	log.Println("UserService initialized.")
+
+	authHandler := handler.NewAuthHandler(userService, cfg)
+	log.Println("AuthHandler initialized.")
+
+	verifyHandler := handler.NewVerifyHandler(userService)
+	log.Println("VerifyHandler initialized.")
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/login", authHandler.Login)
+	mux.HandleFunc("/refresh", authHandler.Refresh)
+
+	mux.HandleFunc("/verify", verifyHandler.HandleVerify)
+	log.Println("HTTP routes registered: /login, /refresh, /verify")
+
+	server := &http.Server{
+		Addr:         ":" + cfg.ServerPort,
+		Handler:      mux,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+
+	go func() {
+		log.Printf("Starting HTTP server on %s...", server.Addr)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("HTTP server ListenAndServe: %v", err)
+		}
+		log.Println("HTTP server stopped.")
+	}()
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+
+	<-stop
+
+	log.Println("Shutting down HTTP server...")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := server.Shutdown(ctx); err != nil {
+		log.Fatalf("HTTP server Shutdown: %v", err)
+	}
+	log.Println("HTTP server gracefully stopped.")
 }

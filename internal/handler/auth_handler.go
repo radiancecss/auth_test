@@ -1,160 +1,109 @@
 package handler
 
 import (
-	"encoding/base64"
-	"encoding/json"
-	"errors"
-	"net/http"
-	"strings"
-
 	"auth_test/internal/service"
-
-	"github.com/golang-jwt/jwt/v5"
+	"encoding/json"
+	"fmt"
+	"net/http"
 )
 
+// Структура AuthHandler
 type AuthHandler struct {
 	userService service.UserService
 }
 
+// Конструктор AuthHandler
 func NewAuthHandler(userService service.UserService) *AuthHandler {
-	return &AuthHandler{
-		userService: userService,
-	}
+	return &AuthHandler{userService: userService}
 }
 
+// AddUserHandler — обработчик для добавления нового пользователя
+func (h *AuthHandler) AddUserHandler(w http.ResponseWriter, r *http.Request) {
+	// Проверяем метод запроса
+	if r.Method != http.MethodPost {
+		http.Error(w, "Метод не поддерживается", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var user struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+
+	// Декодируем тело запроса
+	err := json.NewDecoder(r.Body).Decode(&user)
+	if err != nil {
+		http.Error(w, "Некорректные данные", http.StatusBadRequest)
+		return
+	}
+
+	// Добавляем пользователя в хранилище
+	err = h.userService.AddUser(user.Username, user.Password)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Ошибка при добавлении пользователя: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Возвращаем успешный ответ
+	w.WriteHeader(http.StatusCreated)
+	w.Write([]byte("User added successfully"))
+}
+
+// Login для авторизации пользователя
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
-	authHeader := r.Header.Get("Authorization")
-	if authHeader == "" {
-		http.Error(w, "Authorization header missing", http.StatusUnauthorized)
+	// Получаем логин и пароль из BasicAuth
+	username, password, ok := r.BasicAuth()
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
-	parts := strings.SplitN(authHeader, " ", 2)
-	if len(parts) != 2 || strings.ToLower(parts[0]) != "basic" {
-		http.Error(w, "Authorization header malformed", http.StatusUnauthorized)
-		return
-	}
-
-	credentials, err := base64.StdEncoding.DecodeString(parts[1])
-	if err != nil {
-		http.Error(w, "Failed to decode credentials", http.StatusUnauthorized)
-		return
-	}
-
-	loginParts := strings.SplitN(string(credentials), ":", 2)
-	if len(loginParts) != 2 {
-		http.Error(w, "Invalid username or password format", http.StatusUnauthorized)
-		return
-	}
-	username := loginParts[0]
-	password := loginParts[1]
-
+	// Проверка логина и пароля
 	isValid, err := h.userService.ValidateCredentials(username, password)
+	if err != nil || !isValid {
+		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		return
+	}
+
+	// Генерация токенов
+	accessToken, err := h.userService.GenerateToken(username)
 	if err != nil {
-		if errors.Is(err, service.ErrInvalidCredentials) || errors.Is(err, service.ErrUserNotFound) {
-			http.Error(w, "Invalid username or password", http.StatusUnauthorized)
-			return
-		}
-		http.Error(w, "Internal server error during login validation", http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("Error generating token: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	if !isValid {
-		http.Error(w, "Invalid username or password", http.StatusUnauthorized)
-		return
+	// Возвращаем токены
+	tokens := map[string]string{
+		"access_token": accessToken,
 	}
 
-	token, err := h.userService.GenerateToken(username)
-	if err != nil {
-		http.Error(w, "Internal server error generating token", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Authorization", "Bearer "+token)
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(tokens); err != nil {
+		http.Error(w, fmt.Sprintf("Error encoding response: %v", err), http.StatusInternalServerError)
+		return
+	}
 }
 
-type RefreshRequest struct {
-	RefreshToken string `json:"refresh_token"`
-}
-
-func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req RefreshRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request payload", http.StatusBadRequest)
-		return
-	}
-	defer r.Body.Close()
-
-	newToken, err := h.userService.RefreshToken(req.RefreshToken)
-	if err != nil {
-		if errors.Is(err, jwt.ErrTokenExpired) { // <-- Здесь мог быть jwt.ErrTokenExpired, если он используется напрямую
-			http.Error(w, "Token expired", http.StatusUnauthorized)
-		} else {
-			http.Error(w, "Internal server error refreshing token", http.StatusInternalServerError)
-		}
-		return
-	}
-
-	w.Header().Set("Authorization", "Bearer "+newToken)
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("Token refreshed successfully"))
-}
-
-// Verify проверяет JWT-токен и обновляет его, если он валиден.
-func (h *AuthHandler) Verify(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
+// ProfileHandler — защищенный эндпоинт для /profile
+func (h *AuthHandler) ProfileHandler(w http.ResponseWriter, r *http.Request) {
+	// Извлекаем токен из заголовка Authorization
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
-		http.Error(w, "Authorization header missing or malformed", http.StatusBadRequest)
+		http.Error(w, "Missing Authorization header", http.StatusUnauthorized)
 		return
 	}
 
-	parts := strings.SplitN(authHeader, " ", 2)
-	if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-		http.Error(w, "Invalid Authorization header format", http.StatusBadRequest)
-		return
-	}
-	tokenString := parts[1]
-
+	// Проверяем токен
+	tokenString := authHeader[len("Bearer "):]
 	username, err := h.userService.ValidateToken(tokenString)
 	if err != nil {
-		if errors.Is(err, service.ErrTokenExpired) {
-			refreshedToken, refreshErr := h.userService.RefreshToken(tokenString)
-			if refreshErr != nil {
-				if errors.Is(refreshErr, service.ErrTokenExpired) {
-					http.Error(w, "Token expired and cannot be refreshed", http.StatusUnauthorized)
-				} else {
-					http.Error(w, "Internal server error during token refresh", http.StatusInternalServerError)
-				}
-				return
-			}
-			w.Header().Set("Authorization", "Bearer "+refreshedToken)
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("Token expired, but refreshed successfully"))
-			return
-		} else {
-			http.Error(w, "Invalid token", http.StatusUnauthorized)
-			return
-		}
-	}
-
-	newToken, err := h.userService.GenerateToken(username)
-	if err != nil {
-		http.Error(w, "Internal server error generating new token", http.StatusInternalServerError)
+		http.Error(w, "Invalid token", http.StatusUnauthorized)
 		return
 	}
 
-	w.Header().Set("Authorization", "Bearer "+newToken)
+	// Если токен валиден, возвращаем данные пользователя
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("Token verified"))
+	w.Write([]byte(fmt.Sprintf(`{"message": "Welcome, %s"}`, username)))
 }

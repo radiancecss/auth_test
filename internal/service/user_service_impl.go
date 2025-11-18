@@ -1,20 +1,19 @@
 package service
 
 import (
+	"auth_test/internal/store"
 	"errors"
 	"fmt"
 	"log"
 	"time"
 
-	"auth_test/internal/store"
-
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 )
 
-// Объявления ошибок, используемых в этом пакете.
+// Объявление ошибок
 var (
-	ErrUserNotFound       = errors.New("user not found")
+	ErrUserNotFound       = store.ErrUserNotFound
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrTokenExpired       = errors.New("token is expired")
 )
@@ -25,7 +24,8 @@ type UserServiceImpl struct {
 	TokenLifetime time.Duration
 }
 
-func NewUserServiceImpl(userStore store.UserStore, jwtSecret string, tokenLifetimeMinutes int) UserService {
+// Конструктор для UserServiceImpl
+func NewUserServiceImpl(userStore store.UserStore, jwtSecret string, tokenLifetimeMinutes int) *UserServiceImpl {
 	log.Println("Initializing UserServiceImpl...")
 	return &UserServiceImpl{
 		UserStore:     userStore,
@@ -34,46 +34,65 @@ func NewUserServiceImpl(userStore store.UserStore, jwtSecret string, tokenLifeti
 	}
 }
 
+// Метод для добавления пользователя
+func (s *UserServiceImpl) AddUser(username, password string) error {
+	// Хешируем пароль перед добавлением
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("error hashing password: %v", err)
+	}
+
+	// Добавляем пользователя в хранилище
+	return s.UserStore.AddUser(username, hashedPassword)
+}
+
+// ValidateCredentials проверяет логин и пароль пользователя
 func (s *UserServiceImpl) ValidateCredentials(username, password string) (bool, error) {
 	log.Printf("Validating credentials for user: %s", username)
 
+	// Получаем пользователя из хранилища
 	user, err := s.UserStore.Get(username)
 	if err != nil {
+		log.Printf("Error retrieving user: %v", err)
 		if errors.Is(err, store.ErrUserNotFound) {
-			log.Println("User not found.")
 			return false, ErrInvalidCredentials
 		}
-		log.Printf("Error accessing user store: %v", err)
 		return false, fmt.Errorf("failed to retrieve user: %w", err)
 	}
 
+	// Логируем данные для отладки
+	log.Printf("Hashed password for user %s: %v", username, user.HashedPassword)
+	log.Printf("Provided password: %s", password)
+
+	// Сравниваем хешированный пароль с переданным
 	err = bcrypt.CompareHashAndPassword(user.HashedPassword, []byte(password))
 	if err != nil {
-		if errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
-			log.Println("Password mismatch.")
-			return false, ErrInvalidCredentials
-		}
-		log.Printf("Error comparing password hash: %v", err)
-		return false, fmt.Errorf("failed to compare password: %w", err)
+		log.Printf("Password mismatch or error comparing hash: %v", err)
+		return false, ErrInvalidCredentials
 	}
 
 	log.Printf("Credentials are valid for user: %s", username)
 	return true, nil
 }
 
+// GenerateToken генерирует новый токен для пользователя
 func (s *UserServiceImpl) GenerateToken(username string) (string, error) {
 	log.Printf("Generating token for user: %s", username)
 
+	// Время истечения токена
 	expirationTime := time.Now().Add(s.TokenLifetime)
 
+	// Создаем JWT
 	claims := &jwt.RegisteredClaims{
 		Subject:   username,
 		ExpiresAt: jwt.NewNumericDate(expirationTime),
 		IssuedAt:  jwt.NewNumericDate(time.Now()),
 	}
 
+	// Подписываем JWT
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 
+	// Генерируем строку токена
 	tokenString, err := token.SignedString([]byte(s.JWTSecret))
 	if err != nil {
 		log.Printf("Error signing token: %v", err)
@@ -84,6 +103,7 @@ func (s *UserServiceImpl) GenerateToken(username string) (string, error) {
 	return tokenString, nil
 }
 
+// RefreshToken обновляет токен, используя refresh_token
 func (s *UserServiceImpl) RefreshToken(refreshToken string) (string, error) {
 	log.Printf("Attempting to refresh token...")
 
@@ -96,6 +116,7 @@ func (s *UserServiceImpl) RefreshToken(refreshToken string) (string, error) {
 		return []byte(s.JWTSecret), nil
 	})
 
+	// Если ошибка при парсинге токена
 	if err != nil {
 		if errors.Is(err, jwt.ErrTokenExpired) {
 			log.Println("Token is expired")
@@ -105,11 +126,13 @@ func (s *UserServiceImpl) RefreshToken(refreshToken string) (string, error) {
 		return "", errors.New("invalid token")
 	}
 
+	// Если токен невалиден
 	if !tkn.Valid {
 		log.Println("Token is not valid.")
 		return "", errors.New("invalid token")
 	}
 
+	// Извлекаем данные из токена
 	claimsMap, ok := tkn.Claims.(jwt.MapClaims)
 	if !ok {
 		log.Println("Invalid token claims format")
@@ -122,6 +145,7 @@ func (s *UserServiceImpl) RefreshToken(refreshToken string) (string, error) {
 		return "", errors.New("invalid token claims: subject is not a string or is empty")
 	}
 
+	// Генерируем новый токен
 	newAccessToken, err := s.GenerateToken(username)
 	if err != nil {
 		log.Printf("Failed to generate new token: %v", err)
@@ -131,7 +155,7 @@ func (s *UserServiceImpl) RefreshToken(refreshToken string) (string, error) {
 	return newAccessToken, nil
 }
 
-// ValidateToken проверяет JWT-токен и возвращает имя пользователя, если он валиден.
+// ValidateToken проверяет JWT-токен и возвращает имя пользователя, если он валиден
 func (s *UserServiceImpl) ValidateToken(tokenString string) (string, error) {
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
@@ -140,6 +164,7 @@ func (s *UserServiceImpl) ValidateToken(tokenString string) (string, error) {
 		return []byte(s.JWTSecret), nil
 	})
 
+	// Если ошибка при парсинге токена
 	if err != nil {
 		if errors.Is(err, jwt.ErrTokenExpired) {
 			return "", ErrTokenExpired
@@ -147,10 +172,12 @@ func (s *UserServiceImpl) ValidateToken(tokenString string) (string, error) {
 		return "", errors.New("invalid token format or signature")
 	}
 
+	// Если токен невалиден
 	if !token.Valid {
 		return "", errors.New("invalid token")
 	}
 
+	// Извлекаем данные из токена
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
 		return "", errors.New("invalid token claims format")

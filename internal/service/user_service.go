@@ -1,18 +1,19 @@
-//go:generate mockgen -destination=../../tests/service/mock_user_service.go -package=service auth_test/internal/service UserService
 package service
 
-// ...
-
+// Интерфейс для сервиса пользователей
 type UserService interface {
-	// ValidateCredentials проверяет соответств. имя и пароль от уч. записи
+	// Проверка правильности логина и пароля
 	ValidateCredentials(username, password string) (bool, error)
 
-	// создает новый JWT токен для указанного имени пользователя
+	// Генерация токена
 	GenerateToken(username string) (string, error)
 
-	// обновляет токен если он еще не истек
+	// Обновление токена
 	RefreshToken(refreshToken string) (string, error)
 
-	// ValidateToken проверяет JWT-токен и возвращает имя пользователя, если он валиден.
-	ValidateToken(token string) (string, error)
+	// Проверка валидности токена
+	ValidateToken(tokenString string) (string, error)
+
+	// Добавление нового пользователя
+	AddUser(username, password string) error
 }

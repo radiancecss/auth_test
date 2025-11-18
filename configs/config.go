@@ -1,102 +1,31 @@
-package configs
+package config
 
 import (
-	"fmt"
-	"os"
-	"strconv"
+	"log"
+
+	"github.com/joho/godotenv"
+	"github.com/spf13/viper"
 )
 
 type Config struct {
-	//  Параметры веб-сервера
 	ListenAddr string
-	DebugMode  bool
-
-	//  Параметры JWT
-	JWTSecret            string
-	JWTExpirationMinutes int
-
-	//  Параметры базы данных
-	DBHost     string // Хост базы данных
-	DBPort     int    // Порт базы данных
-	DBUser     string // Пользователь базы данных
-	DBPassword string // Пароль для пользователя
-	DBName     string // Название базы данных
+	JWTSecret  string
 }
 
 func LoadConfig() (*Config, error) {
-	cfg := &Config{
-		// Значения по умолчанию
-		ListenAddr:           ":8080",
-		DBHost:               "localhost",
-		DBPort:               5432,
-		DebugMode:            false,
-		JWTExpirationMinutes: 60, // Время жизни токена в минутах
+	// Загружаем .env файл
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading .env file")
 	}
 
-	//  Чтение обязательных переменных
+	// Загружаем конфигурацию с помощью Viper
+	viper.AutomaticEnv() // автоматически ищет переменные окружения
 
-	// JWTSecret - обязательная переменная.
-	jwtSecret := os.Getenv("JWT_SECRET")
-	if jwtSecret == "" {
-		return nil, fmt.Errorf("environment variable JWT_SECRET is not set")
-	}
-	cfg.JWTSecret = jwtSecret
-
-	// Параметры БД
-	dbUser := os.Getenv("DB_USER")
-	if dbUser == "" {
-		return nil, fmt.Errorf("environment variable DB_USER is not set")
-	}
-	cfg.DBUser = dbUser
-
-	dbPassword := os.Getenv("DB_PASSWORD")
-	if dbPassword == "" {
-		return nil, fmt.Errorf("environment variable DB_PASSWORD is not set")
-	}
-	cfg.DBPassword = dbPassword
-
-	dbName := os.Getenv("DB_NAME")
-	if dbName == "" {
-		return nil, fmt.Errorf("environment variable DB_NAME is not set")
-	}
-	cfg.DBName = dbName
-
-	//  Чтение необязательных переменных
-
-	if addr := os.Getenv("LISTEN_ADDR"); addr != "" {
-		cfg.ListenAddr = addr
+	config := &Config{
+		ListenAddr: viper.GetString("SERVER_PORT"), // Получаем порт сервера
+		JWTSecret:  viper.GetString("JWT_SECRET"),  // Получаем секрет для JWT
 	}
 
-	if host := os.Getenv("DB_HOST"); host != "" {
-		cfg.DBHost = host
-	}
-
-	if portStr := os.Getenv("DB_PORT"); portStr != "" {
-		port, err := strconv.Atoi(portStr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse DB_PORT '%s': %w", portStr, err)
-		}
-		cfg.DBPort = port
-	}
-
-	if debugStr := os.Getenv("DEBUG_MODE"); debugStr != "" {
-		debug, err := strconv.ParseBool(debugStr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse DEBUG_MODE '%s': %w", debugStr, err)
-		}
-		cfg.DebugMode = debug
-	}
-
-	if expMinStr := os.Getenv("JWT_EXPIRATION_MINUTES"); expMinStr != "" {
-		expMin, err := strconv.Atoi(expMinStr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse JWT_EXPIRATION_MINUTES '%s': %w", expMinStr, err)
-		}
-		if expMin <= 0 {
-			return nil, fmt.Errorf("JWT_EXPIRATION_MINUTES must be a positive number")
-		}
-		cfg.JWTExpirationMinutes = expMin
-	}
-
-	return cfg, nil
+	return config, nil
 }

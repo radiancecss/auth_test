@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"auth_test/internal/service" // Путь к твоему сервису
+	"auth_test/internal/service"
 )
 
 // VerifyHandler обрабатывает запросы проверки JWT-токена.
